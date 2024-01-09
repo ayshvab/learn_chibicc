@@ -13,7 +13,6 @@
 typedef enum {
     TK_PUNCT, // Punctuators
     TK_NUM,   // Numeric literals
-
     TK_EOF,   // End-of-file markers
 } TokenKind;
 
@@ -135,6 +134,7 @@ typedef enum {
     ND_SUB, // -
     ND_MUL, // *
     ND_DIV, // /
+    ND_NEG, // unary -
     ND_NUM, // Integer
 } NodeKind;
 
@@ -166,8 +166,15 @@ static Node *new_num(int val) {
     return node;
 }
 
+static Node *new_unary(NodeKind kind, Node *epxr) {
+    Node *node = new_node(kind);
+    node->lhs = expr;
+    return node;
+}
+
 static Node *epxr(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
+static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 
 // expr = mul ("+" mul | "-" mul)*
@@ -175,53 +182,65 @@ static Node *expr(Token **rest, Token *tok) {
     Node *node = mul(&tok, tok);
 
     for (;;) {
-	if (equal(tok, "+")) {
-	    node = new_binary(ND_ADD, node, mul(&tok, tok->next));
-	    continue;
-	}
+    	if (equal(tok, "+")) {
+    	    node = new_binary(ND_ADD, node, mul(&tok, tok->next));
+    	    continue;
+    	}
 
-	if (equal(tok, "-")) {
-	    node = new_binary(ND_SUB, node, mul(&tok, tok->next));
-	    continue;
-	}
+    	if (equal(tok, "-")) {
+    	    node = new_binary(ND_SUB, node, mul(&tok, tok->next));
+    	    continue;
+    	}
 
-	*rest = tok;
-	return node;
+    	*rest = tok;
+    	return node;
     }
 }
 
-// mul = primary ("*" primary | "/" primary)*
+// mul = unary ("*" unary | "/" unary)*
 static Node *mul(Token **rest, Token *tok) {
-    Node *node = primary(&tok, tok);
+    Node *node = unary(&tok, tok);
 
     for (;;) {
-	if (equal(tok, "*")) {
-	    node = new_binary(ND_MUL, node, primary(&tok, tok->next));
-	    continue;
-	}
+    	if (equal(tok, "*")) {
+    	    node = new_binary(ND_MUL, node, unary(&tok, tok->next));
+    	    continue;
+    	}
 
-	if (equal(tok, "/")) {
-	    node = new_binary(ND_DIV, node, primary(&tok, tok->next));
-	    continue;
-	}
+    	if (equal(tok, "/")) {
+    	    node = new_binary(ND_DIV, node, unary(&tok, tok->next));
+    	    continue;
+    	}
 
-	*rest = tok;
-	return node;
+    	*rest = tok;
+    	return node;
     }
+}
+
+// unary = ("+" | "-") unary
+//       | primary
+static Node *unary(Token **rest, Token *tok) {
+    if (equal(tok, "+"))
+        return unary(rest, tok->next);
+
+    if (equal(tok, "-"))
+        return new_unary(ND_NEG, unary(rest, tok->next));
+
+    return primary(rest, tok);
 }
 
 // primary = "(" expr ")" | num
 static Node *primary(Token **rest, Token *tok) {
     if (equal(tok, "(")) {
-	Node *node = expr(&tok, tok->next);
-	*rest = skip(tok, ")");
-	return node;
+	   Node *node = expr(&tok, tok->next);
+	   *rest = skip(tok, ")");
+	   return node;
     }
 
     if (tok->kind == TK_NUM) {
-	Node *node = new_num(tok->val);
-	*rest = tok->next;
-	return node;
+	   Node *node = new_num(tok->val);
+	   *rest = tok->next;
+	   return node;
     }
 
     error_tok(tok, "expected an expression");
@@ -244,9 +263,14 @@ static void pop(char *arg) {
 }
 
 static void gen_expr(Node *node) {
-    if (node->kind == ND_NUM) {
-	printf("  mov $%d, %%rax\n", node->val);
-	return;
+    switch (node->kind) {
+    case ND_NUM:
+        printf("  mov $%d, %%rax\n", node->val);
+        return;
+    case ND_NEG:
+        gen_expr(node->lhs);
+        printf("  neg %%rax\n");
+        return;
     }
 
     gen_expr(node->rhs);
@@ -256,18 +280,18 @@ static void gen_expr(Node *node) {
 
     switch (node->kind) {
     case ND_ADD:
-	printf("  add %%rdi, %%rax\n");
-	return;
+    	printf("  add %%rdi, %%rax\n");
+    	return;
     case ND_SUB:
-	printf("  sub %%rdi, %%rax\n");
-	return;
+    	printf("  sub %%rdi, %%rax\n");
+    	return;
     case ND_MUL:
-	printf("  imul %%rdi, %%rax\n");
-	return;
+    	printf("  imul %%rdi, %%rax\n");
+    	return;
     case ND_DIV:
-	printf("  cqo\n");
-	printf("  idiv %%rdi\n");
-	return;
+    	printf("  cqo\n");
+    	printf("  idiv %%rdi\n");
+    	return;
     }
 
     error("invalid expression");
